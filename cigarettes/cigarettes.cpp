@@ -18,7 +18,6 @@
 #include <string>
 #include <algorithm>
 #include <pthread.h>
-#include <semaphore.h>
 #include <unistd.h>
 
 using namespace std;
@@ -188,7 +187,7 @@ int main() {
         pthread_mutex_lock(&mutex);
 
         // Add smoker to the queue.
-        cout << "Smoker #" << i << " has arrived.";
+        cout << "Smoker #" << i << " has arrived.\n";
         smoker_queue.push(Smoker(i));
 
         // Unlock the mutex;

@@ -1,19 +1,15 @@
 {
     "configurations": [
         {
-            "name": "Win32",
-            "includePath": [],
-            "defines": [
-                "_DEBUG",
-                "UNICODE",
-                "_UNICODE"
+            "name": "Linux",
+            "includePath": [
+                "${workspaceFolder}/**"
             ],
-            "windowsSdkVersion": "10.0.22000.0",
-            "compilerPath": "C:/msys64/mingw64/bin/g++.exe",
+            "defines": [],
+            "compilerPath": "/usr/bin/gcc",
             "cStandard": "c17",
-            "cppStandard": "c++17",
-            "intelliSenseMode": "windows-gcc-x86",
-            "compilerArgs": []
+            "cppStandard": "gnu++17",
+            "intelliSenseMode": "linux-gcc-x64"
         }
     ],
     "version": 4
