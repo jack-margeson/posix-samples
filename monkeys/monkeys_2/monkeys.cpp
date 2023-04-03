@@ -87,7 +87,8 @@ const int MAX_CROSSING_WESTWARD = 2;
 bool worker_active = false;
 long int time_to_cross = 0;
 long int arrival_rate = 0;
-int num_monkeys = 0;
+string simulation_mode = "";
+int num_primates = 0;
 // Mutex locks, semaphores, shared queues, etc.
 sem_t queue_semaphore;
 sem_t crossing_semaphore;
@@ -107,7 +108,6 @@ auto waitUntilSafe() {
     // If there are less than MAX_CROSSING currently crossing,
     // and if the primate is going the same direction as the 
     // currently crossing primates, then they are able to go.
-
     // Lock the queue semaphore.
     sem_wait(&queue_semaphore);
     // Init. a temp. primate.
@@ -122,15 +122,17 @@ auto waitUntilSafe() {
     // In the case we're a human, then we have to check if the currently crossing total is under MAX_CROSSING.
     // However, we do not have to check if we're going the same direction as the other humans, 
     // we only have to check if there are less than MAX_CROSSING_EASTWARD and MAX_CROSSING_WESTWARD depending on direction.
-    if (!currently_crossing.total() == 0) {
+    if (!(currently_crossing.total() == 0)) {
         switch(temp_primate.getSpecies()) {
             case MONKEY:
                 while (currently_crossing.total() == MAX_CROSSING) {
+                    cout << currently_crossing.total();
                     // If the current amount of monkeys is equal to the max, we need to wait
                     // for the crossing semaphore until there is room.
                     sem_wait(&crossing_semaphore);
                 }
                 while (currently_crossing.direction != temp_primate.getDirection()) {
+                    cout << temp_primate.to_string() << " needs to wait\n";
                     // If the current monkey does not fit in with the current direction,
                     // wait until all monkeys have crossed in the current direction before continuing.
                     sem_wait(&crossing_semaphore);
@@ -183,29 +185,104 @@ auto crossRavine() {
     // Output crossing string and wait the crossing amount of time.
     cout << p.to_string() << " is currently crossing.\n";
     sleep(time_to_cross);
-}
+    cout << p.to_string() << " has finished crossing.\n";
 
-auto doneWithCrossing() {
     // The primate we just dequeued has finished crossing the ravine.
     // Update the currently crossing structure.
     // Update count.
-    currently_crossing.decrement();
-    // We can update currently_crossing and then signal that the next primate
-    // can cross.
+    currently_crossing.decrement(p);
+    // Update direction.
+    if (currently_crossing.total() == 0) {
+        currently_crossing.direction = NONE;
+    }
+}
+
+auto doneWithCrossing() {
+    // We can signal that the next primate can cross.
     sem_post(&crossing_semaphore);
 }
 
 void* crossing_guard (void* arg) {
-    // Wait until it is safe for the next primate to cross.
-    waitUntilSafe();
-    // Cross the ravine when it is safe to cross.
-    crossRavine();
-    // Signal that primate is done with crossing.
-    doneWithCrossing();
+    while (worker_active) {
+        if (!primate_queue.empty()) {
+            // Wait until it is safe for the next primate to cross.
+            waitUntilSafe();
+            // Cross the ravine when it is safe to cross.
+            crossRavine();
+            // Signal that primate is done with crossing.
+            doneWithCrossing();
+        }
+    }
+    return NULL;
 }
 
 
 int main() {
+    // Intalize semaphores.
+    sem_init(&crossing_semaphore, 0, 1);
+    sem_init(&queue_semaphore, 0, 1);
 
+    // Ask user some questions about the simulation
+    cout << "Primate Crossing Simulation\n" << \
+            "--------------------\n";
+    cout << "Would you like to run the simulation in monkey or human mode? (monkey/human): ";
+    cin >> simulation_mode;
+    cout << "How many primates would you like to simulate? (n): ";
+    cin >> num_primates;
+       cout << "How often do primates appear at the ravine? (seconds): ";
+    cin >> arrival_rate;
+    cout << "How long does it take to cross the ravine? (seconds): ";
+    cin >> time_to_cross;
+    cout << "\nBeginning simulation...\n" << \
+            "-----------------------\n";
+
+    // Seed random number generator.
+    srand(time(0));
+
+    // Start clock.
+    auto start_time = chrono::high_resolution_clock::now();
+
+    // Start "crossing guard" worker thread.
+    worker_active = true;
+    pthread_t crossing_guard_thread;
+    pthread_create(&crossing_guard_thread, NULL, crossing_guard, 0);
+
+    // Start adding primates to the queue.
+    for (int i = 0; i < num_primates; i++) {
+        sem_wait(&queue_semaphore);
+        // Generate a random number from 0 to 1
+        direction_type d = (rand() % 2) ? EASTWARD : WESTWARD;
+        species_type s = (simulation_mode == "monkey") ? MONKEY : HUMAN;
+        Primate p = Primate(i+1, d, s);
+        primate_queue.push(p);
+        cout << p.Primate::to_string() << " has arrived.\n";
+        sem_post(&queue_semaphore);
+        // Wait for the next primate.
+        sleep(arrival_rate);
+    }
+
+    // Hold program until the primate vector is empty.
+    while (!primate_queue.empty()) {}
+    // Wait for the final primate to cross.
+    sleep(time_to_cross);
+    // Kill the crossing guard.
+    worker_active = false;
+    pthread_join(crossing_guard_thread, NULL);
+
+    // Stop the chrono clock, print elapsed time in microseconds
+    auto end_time = chrono::high_resolution_clock::now();
+    auto elapsed_time = chrono::duration_cast<chrono::seconds>(end_time - start_time);
+    // Wait a second for the worker threads to finish being killed before printing results.
+    sleep(1);
+    // Print simulation results
+    cout << "\nEnd simulation...\n" << \
+        "-------------------\n";
+    cout << "All primates have crossed the ravine.\n";
+    cout << "Elapsed simulation time: " << elapsed_time.count() << " seconds" << endl;
+
+
+    // Destroy semaphores
+    sem_destroy(&crossing_semaphore);
+    sem_destroy(&queue_semaphore);
     return 0;
 }

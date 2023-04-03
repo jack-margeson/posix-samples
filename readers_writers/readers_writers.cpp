@@ -109,7 +109,7 @@ int main() {
     pthread_create(&operation_handler_thread, NULL, operation_handler, 0);
 
     // Operation type queue:
-    vector<operation_type> op_types = {READER, READER, READER, WRITER, READER, WRITER, READER};
+    vector<operation_type> op_types = {READER, WRITER, READER, WRITER, READER, READER, READER};
     // Queue some operations.
     int i = 0;
     while (!op_types.empty()) {
