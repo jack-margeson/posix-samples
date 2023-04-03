@@ -4,229 +4,208 @@
 // all die. Also, if eastward-moving monkeys encounter westward moving monkeys,
 // all will fall off and die.
 
-// Library imports
+// Library imports.
 #include <iostream>
 #include <chrono>
-#include <vector>
+#include <queue>
 #include <algorithm>
 #include <pthread.h>
 #include <semaphore.h>
 #include <unistd.h>
 
+// Namespace declaration.
 using namespace std;
 
-enum direction_type {EASTWARD, WESTWARD};
+// Enum declarations.
+enum direction_type {EASTWARD, WESTWARD, NONE};
+enum species_type {MONKEY, HUMAN};
 
-class Monkey {
-    public:
-        // non-static public variables
+// Primate class, handles data for both monkeys and humans
+class Primate {
+    private:
         int id;
         direction_type direction;
+        species_type species;
 
-        Monkey(int id, direction_type direction) {
+    public: 
+        Primate(int id, direction_type direction, species_type species) {
             this->id = id;
             this->direction = direction;
+            this->species = species;
         }
 
-        string getMonkeyIdentifier() {
-            return "Monkey #" + std::to_string(this->id);
+        direction_type getDirection() {
+            return this->direction;
         }
 
-        string getDirection() {            
-            switch (this->direction) {
+        string getDirectionString() {
+            switch(this->direction) {
                 case EASTWARD:
                     return "eastward";
                     break;
                 case WESTWARD:
                     return "westward";
                     break;
-            } 
+                case NONE:
+                    return "none";
+                    break;
+            }
             return "";
         }
 
+        species_type getSpecies() {
+            return this->species;
+        }
+
+        string getSpeciesString() {
+            switch(this->species) {
+                case MONKEY:
+                    return "Monkey";
+                    break;
+                case HUMAN:
+                    return "Human";
+                    break;
+            }
+            return "";
+        }
+
+        string getPrimateIdentifier() {
+            return getSpeciesString() + " #" + std::to_string(this->id);
+        }
+
         string to_string() {
-            string s = "";
-            s += getMonkeyIdentifier();
-            s += ", ";
-            s += getDirection();
-            return s;
+            return getPrimateIdentifier() + ", " + getDirectionString();
         }
 };
 
 // Global variables 
-bool workers_active = false;
+// Constants
+const int MAX_CROSSING = 5;
+const int MAX_CROSSING_EASTWARD = 3;
+const int MAX_CROSSING_WESTWARD = 2;
+// Worker information
+bool worker_active = false;
 long int time_to_cross = 0;
 long int arrival_rate = 0;
-int num_monkeys;
-const int MAX_MONKEYS = 5;
-// Mutex locks, semaphores, shared queues
-sem_t vector_semaphore;
+int num_monkeys = 0;
+// Mutex locks, semaphores, shared queues, etc.
+sem_t queue_semaphore;
 sem_t crossing_semaphore;
-vector<Monkey> monkey_vector;
+queue<Primate> primate_queue;
+// Shared struct of currently crossing primates.
+struct  {
+    public: 
+        int total_east = 0;
+        int total_west = 0;
+        direction_type direction = NONE;
+        int total() { return this->total_east + this->total_west; }
+        void increment(Primate p) { (p.getDirection() == EASTWARD) ? total_east++ : total_west++; }
+        void decrement(Primate p) { (p.getDirection() == EASTWARD) ? total_east-- : total_west--; }
+} currently_crossing;
 
-auto waitUntilSafe () {
-    // Wait until the crossing_semaphore is posted.
-    sem_wait(&crossing_semaphore);
-}
+auto waitUntilSafe() {
+    // If there are less than MAX_CROSSING currently crossing,
+    // and if the primate is going the same direction as the 
+    // currently crossing primates, then they are able to go.
 
-auto crossRavine () {
     // Lock the queue semaphore.
-    // If we're in this function, the rope is empty. We can 
-    // accept 5 monkeys at the same time, provided that they're
-    // going the right direction. Find the first 5 monkeys in the queue
-    // that match the first direction, then send them. If there are less 
-    // than 5, let them go.
+    sem_wait(&queue_semaphore);
+    // Init. a temp. primate.
+    Primate temp_primate = primate_queue.front();
+    // Post the queue semaphore.
+    sem_post(&queue_semaphore);
 
-    // Lock the main vector from operations.
-    sem_wait(&vector_semaphore);
-
-    // Get the first monkey in the queue, the "leader"
-    // and add to the currently crossing vector
-    vector<Monkey> currently_crossing;
-    direction_type currently_crossing_direction;
-    cout << monkey_vector.front().Monkey::getMonkeyIdentifier() <<
-                        " is getting ready to cross.\n";
-    currently_crossing.push_back(monkey_vector.front());
-    currently_crossing_direction = monkey_vector.front().direction;
-    monkey_vector.erase(monkey_vector.begin());
-
-    // For the rest of the monkeys in the monkey vector/queue,
-    // check if they're going the same direction as the "leader"
-    // monkey at the front of the currently crossing vector.
-    // If they are, we can add them to the currently crossing group
-    // as long as there are not more than MAX_MONKEYS in the group.
-    // Otherwise, state the monkey is going in the same direction, 
-    // but cannot come due to the limit on the rope.
-    vector<Monkey> remaining_monkeys;
-    for (int i = 0; i < monkey_vector.size(); i++) {
-        if (monkey_vector[i].direction == currently_crossing_direction) {
-            if (currently_crossing.size() < MAX_MONKEYS) {
-                cout << monkey_vector[i].getMonkeyIdentifier() << 
-                    " is getting ready to cross.\n";
-                currently_crossing.push_back(monkey_vector[i]);
-            } else {
-                cout << monkey_vector[i].getMonkeyIdentifier() << 
-                    " is waiting to cross " << monkey_vector[i].getDirection() <<
-                    ", but the current group is full.\n";
-                remaining_monkeys.push_back(monkey_vector[i]);
-            }
-        } else {
-            remaining_monkeys.push_back(monkey_vector[i]);
+    // Base case: if there are no primate crossing, it's safe to cross.
+    // If we're a monkey, then we have to check if the currently crossing total is under MAX_CROSSING.
+    // If it is, we also have to check if we're going the same direction as the currently crossing.
+    // If both are true, we're safe to cross.
+    // In the case we're a human, then we have to check if the currently crossing total is under MAX_CROSSING.
+    // However, we do not have to check if we're going the same direction as the other humans, 
+    // we only have to check if there are less than MAX_CROSSING_EASTWARD and MAX_CROSSING_WESTWARD depending on direction.
+    if (!currently_crossing.total() == 0) {
+        switch(temp_primate.getSpecies()) {
+            case MONKEY:
+                while (currently_crossing.total() == MAX_CROSSING) {
+                    // If the current amount of monkeys is equal to the max, we need to wait
+                    // for the crossing semaphore until there is room.
+                    sem_wait(&crossing_semaphore);
+                }
+                while (currently_crossing.direction != temp_primate.getDirection()) {
+                    // If the current monkey does not fit in with the current direction,
+                    // wait until all monkeys have crossed in the current direction before continuing.
+                    sem_wait(&crossing_semaphore);
+                }
+                // We should be good to cross now. We'll add to the currently crossing in crossRavine().
+                break;
+            case HUMAN:
+                while (currently_crossing.total() == MAX_CROSSING) {
+                    // Wait for the semaphore if the max amount of current humans has been reached.
+                    sem_wait(&crossing_semaphore);
+                }
+                // Switch based on direction of the human.
+                switch(temp_primate.getDirection()) {
+                    case EASTWARD:
+                        while (currently_crossing.total_east == MAX_CROSSING_EASTWARD) {
+                            // Wait for the semaphore if the max amount of eastward crossing humans has been reached.
+                            sem_wait(&crossing_semaphore);
+                        }
+                        break;
+                    case WESTWARD:
+                        while (currently_crossing.total_west == MAX_CROSSING_WESTWARD) {
+                            // Wait for the semaphore if the max amount of eastward crossing humans has been reached.
+                            sem_wait(&crossing_semaphore);
+                        }
+                        break;
+                    case NONE:
+                        break;
+                }
+                // We should be good to cross now. We'll add to the currently crossing in crossRavine().
+                break;
         }
     }
-    monkey_vector = remaining_monkeys;
+}
 
-
-    // Free the main vector for writing.
-    sem_post(&vector_semaphore);
-
-
-    // Cross all monkeys going the same direction, in n=MAX_MONKEYS group
-    cout << "A group of monkeys (";
-    string curr = "";
-    for (Monkey m : currently_crossing) {
-        curr += m.Monkey::getMonkeyIdentifier();
-        curr += ", ";
+auto crossRavine() {
+    // We know the primate next in line is cleared to cross the ravine.
+    // Pop the first primate off of the queue.
+    sem_wait(&queue_semaphore);
+    Primate p = primate_queue.front();
+    primate_queue.pop();
+    sem_post(&queue_semaphore);
+    // Update the currently crossing structure.
+    // Update direction.
+    if (currently_crossing.direction == NONE) {
+        currently_crossing.direction = p.getDirection();
     }
-    curr.resize(curr.size() - 2);
-    cout << curr << 
-            ") is crossing the ravine going " <<
-            currently_crossing.front().Monkey::getDirection()
-            << ".\n";
+    // Update count.
+    currently_crossing.increment(p);
 
-    // Wait the ravine crossing time.
+    // Output crossing string and wait the crossing amount of time.
+    cout << p.to_string() << " is currently crossing.\n";
     sleep(time_to_cross);
-
-    // Print that the group has made it across.
-    cout << "The group of monkeys (" <<
-            curr <<
-            ") has made it across the ravine.\n";
 }
 
 auto doneWithCrossing() {
-    // Post the crossing semaphore.
+    // The primate we just dequeued has finished crossing the ravine.
+    // Update the currently crossing structure.
+    // Update count.
+    currently_crossing.decrement();
+    // We can update currently_crossing and then signal that the next primate
+    // can cross.
     sem_post(&crossing_semaphore);
 }
 
 void* crossing_guard (void* arg) {
-    while (workers_active) {
-        if (!monkey_vector.empty()) {
-            // Wait until it is safe for monkeys to cross.
-            waitUntilSafe();
-            // If it's safe to cross, cross the ravine.
-            crossRavine();
-            // Signal that the current group of monkeys is done crossing.
-            doneWithCrossing();
-        }
-    }
-
-    return NULL;
+    // Wait until it is safe for the next primate to cross.
+    waitUntilSafe();
+    // Cross the ravine when it is safe to cross.
+    crossRavine();
+    // Signal that primate is done with crossing.
+    doneWithCrossing();
 }
 
 
 int main() {
-    // Intalize semaphores.
-    sem_init(&crossing_semaphore, 0, 1);
-    sem_init(&vector_semaphore, 0, 1);
 
-    // Ask user how many monkeys they'd like to simulate 
-    cout << "Monkey Crossing Simulation\n" << \
-            "--------------------\n";
-    cout << "How many monkeys would you like to simulate? (n): ";
-    cin >> num_monkeys;
-       cout << "How often do monkeys appear at the ravine? (seconds): ";
-    cin >> arrival_rate;
-    cout << "How long does it take to cross the ravine? (seconds): ";
-    cin >> time_to_cross;
-    cout << "\nBeginning simulation...\n" << \
-            "-----------------------\n";
-
-    // Start clock.
-    auto start_time = chrono::high_resolution_clock::now();
-
-
-    // Start "crossing guard" worker thread.
-    workers_active = true;
-    pthread_t crossing_guard_thread;
-    pthread_create(&crossing_guard_thread, NULL, crossing_guard, 0);
-
-    // Seed random number generator.
-    srand(time(0));
-    
-    // Start adding monkeys to the vector.
-    for (int i = 0; i < num_monkeys; i++) {
-        sem_wait(&vector_semaphore);
-        // Generate a random number from 0 to 1
-        direction_type d = (rand() % 2) ? EASTWARD : WESTWARD;
-        Monkey m = Monkey(i+1, d);
-        monkey_vector.push_back(m);
-        cout << m.Monkey::to_string() << " has arrived.\n";
-        sem_post(&vector_semaphore);
-
-        // Wait for the next monkey
-        sleep(arrival_rate);
-    }
-
-    // Hold program until the monkey vector is empty.
-    while (!monkey_vector.empty()) {}
-    // Wait for the final monkey group to cross.
-    sleep(time_to_cross);
-    // Kill the operation handler crossing guard.
-    workers_active = false;
-
-    // Stop the chrono clock, print elapsed time in microseconds
-    auto end_time = chrono::high_resolution_clock::now();
-    auto elapsed_time = chrono::duration_cast<chrono::seconds>(end_time - start_time);
-    // Wait a second for the worker threads to finish being killed before printing results.
-    sleep(1);
-    // Print simulation results
-    cout << "\nEnd simulation...\n" << \
-        "-------------------\n";
-    cout << "All monkeys have crossed the ravine.\n";
-    cout << "Elapsed simulation time: " << elapsed_time.count() << " seconds" << endl;
-
-    // Destroy semaphores
-    sem_destroy(&crossing_semaphore);
-    sem_destroy(&vector_semaphore);
     return 0;
 }
